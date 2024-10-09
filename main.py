@@ -1,17 +1,17 @@
-import os
-import re
+from datetime import datetime, timedelta, time
+from notion_client import Client
+from urllib.parse import quote
+from dotenv import load_dotenv
+from job_offer import JobOffer
+from itertools import groupby
+from bs4 import BeautifulSoup
 from typing import List
+import time as tm
 import requests
 import json
-from bs4 import BeautifulSoup
-from dotenv import load_dotenv
-import time as tm
-from itertools import groupby
-from datetime import datetime, timedelta, time
-from urllib.parse import quote
-from notion_client import Client
+import re
+import os
 
-from job_offer import JobOffer
 
 # Load environment variables
 load_dotenv()
