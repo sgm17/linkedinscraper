@@ -396,28 +396,30 @@ def create_notion_database() -> str:
 if __name__ == "__main__":
     start_time = tm.perf_counter()
 
-    keyword = config["search_queries"][0]["keywords"]
-    keyword = "_".join(keyword.split(" ")).upper()
+    for search_queries in config["search_queries"]:
+        keyword = search_queries["keywords"]
 
-    # Get the id of the db for the given keyword
-    database_id = os.getenv(keyword)
+        keyword = "_".join(keyword.split(" ")).upper()
 
-    if not database_id:
-        id = update_env_file()
-        # Update the .env file with the new keyword
-        os.environ[keyword] = id
+        # Get the id of the db for the given keyword
+        database_id = os.getenv(keyword)
 
-    # Retrieve all the jobs from the db id
-    stored_jobs = retrieve_stored_jobs_from_notion()
+        if not database_id:
+            id = update_env_file()
+            # Update the .env file with the new keyword
+            os.environ[keyword] = id
 
-    # Get all the scrapped jobs
-    new_jobs = retrieve_job_offers()
+        # Retrieve all the jobs from the db id
+        stored_jobs = retrieve_stored_jobs_from_notion()
 
-    # Substract the duplicated job offers
-    jobs_to_store = [job for job in new_jobs if job not in stored_jobs]
-    print(f"This is the number of new scrapped job offers: {len(jobs_to_store)}")
+        # Get all the scrapped jobs
+        new_jobs = retrieve_job_offers()
 
-    update_notion_database(jobs_to_store)
+        # Substract the duplicated job offers
+        jobs_to_store = [job for job in new_jobs if job not in stored_jobs]
+        print(f"This is the number of new scrapped job offers: {len(jobs_to_store)}")
 
-    end_time = tm.perf_counter()
-    print(f"Scraping finished in {end_time - start_time:.2f} seconds")
+        update_notion_database(jobs_to_store)
+
+        end_time = tm.perf_counter()
+        print(f"Scraping finished in {end_time - start_time:.2f} seconds")
