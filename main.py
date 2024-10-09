@@ -1,20 +1,33 @@
+import os
 import re
+from typing import List
 import requests
 import json
-import sys
-from sqlite3 import Error
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 import time as tm
 from itertools import groupby
 from datetime import datetime, timedelta, time
-import pandas as pd
 from urllib.parse import quote
+from notion_client import Client
+
+from job_offer import JobOffer
+
+# Load environment variables
+load_dotenv()
+
+NOTION_TOKEN = os.getenv("NOTION_API_KEY")
+NOTION_PAGE_ID = os.getenv("NOTION_PAGE_ID")
+notion = Client(auth=NOTION_TOKEN)
 
 
-def load_config(file_name):
+def load_config():
     # Load the config file
-    with open(file_name) as f:
+    with open("config.json") as f:
         return json.load(f)
+
+
+config = load_config()
 
 
 def get_with_retry(url, config, retries=3, delay=1):
@@ -161,14 +174,10 @@ def get_jobcards(config):
     return all_jobs
 
 
-def main(config_file):
-    start_time = tm.perf_counter()
+def retrieve_job_offers() -> List[JobOffer]:
     job_list = []
 
-    config = load_config(config_file)
-
     all_jobs = get_jobcards(config)
-    # conn = create_connection(config)
 
     # filtering out jobs that are already in the database
     print("Total new jobs found after comparing to the database: ", len(all_jobs))
@@ -182,28 +191,233 @@ def main(config_file):
             # if job is older than a week, skip it
             if job_date < datetime.now() - timedelta(days=config["days_to_scrape"]):
                 continue
+
+            desc_soup = get_with_retry(job["job_url"], config)
+            extracted_data = transform_job(desc_soup)
+            job["email"] = extracted_data["email_address"]
+            job["telephone"] = extracted_data["telephone_number"]
+            job["job_description"] = extracted_data["text"]
+
+            # Check if job_description is not None before checking its length
+            if (
+                job["job_description"] is not None
+                and len(job["job_description"]) > 2000
+            ):
+                # Reduce the length of the job description if it's too large
+                job["job_description"] = job["job_description"][:2000]
+
+            new_job = JobOffer(
+                job["company"],
+                job["title"],
+                job["location"],
+                job["date"],
+                job["telephone"],
+                job["job_description"],
+                job["email"],
+                job["job_url"],
+            )
+            job_list.append(
+                new_job,
+            )
             print(
                 "Found new job: ", job["title"], "at ", job["company"], job["job_url"]
             )
-            desc_soup = get_with_retry(job["job_url"], config)
-            extracted_data = transform_job(desc_soup)
-            job["job_description"] = extracted_data["text"]
-            job["email"] = extracted_data["email_address"]
-            job["telephone"] = extracted_data["telephone_number"]
-            job_list.append(job)
-
         print("Total jobs to add: ", len(job_list))
-
-        print(job_list[0])
-
+        return job_list
     else:
-        print("No jobs found")
+        return job_list
 
-    end_time = tm.perf_counter()
-    print(f"Scraping finished in {end_time - start_time:.2f} seconds")
+
+def update_env_file() -> str:
+    # Create notion database
+    id = create_notion_database()
+
+    with open(".env", "a") as env_file:
+        env_file.write(f"\n{keyword}={id}")
+
+    # Set the new variable
+    return id
+
+
+def retrieve_stored_jobs_from_notion() -> List[JobOffer]:
+    response = notion.databases.query(database_id)
+
+    jobs = []
+
+    if not response:
+        return jobs
+
+    for page in response["results"]:
+        properties = page["properties"]
+
+        # Extract fields from the properties
+        title = (
+            properties["Title"]["title"][0]["text"]["content"]
+            if properties["Title"]["title"]
+            else None
+        )
+        company = (
+            properties["Company"]["rich_text"][0]["text"]["content"]
+            if properties["Company"]["rich_text"]
+            else None
+        )
+        location = (
+            properties["Location"]["rich_text"][0]["text"]["content"]
+            if properties["Location"]["rich_text"]
+            else None
+        )
+        timestamp = (
+            properties["Timestamp"]["date"]["start"]
+            if properties.get("Timestamp") and properties["Timestamp"]["date"]
+            else None
+        )
+        description = (
+            properties["Description"]["rich_text"][0]["text"]["content"]
+            if properties["Description"]["rich_text"]
+            else None
+        )
+        telephone = (
+            properties["Telephone"]["phone_number"]
+            if properties.get("Telephone")
+            else None
+        )
+        email = properties["Email"]["email"] if properties.get("Email") else None
+        url = properties["URL"]["url"] if properties.get("URL") else None
+
+        new_job = JobOffer(
+            company,
+            title,
+            location,
+            timestamp,
+            telephone,
+            description,
+            email,
+            url,
+        )
+        jobs.append(new_job)
+
+    return jobs
+
+
+def update_notion_database(jobs: List[JobOffer]):
+    def append_job_to_database(job: JobOffer):
+        parsed_date = datetime.strptime(job.timestamp, "%Y-%m-%d")
+
+        # Construct the body of the request
+        body = {
+            "parent": {
+                "type": "database_id",
+                "database_id": database_id,
+            },
+            "properties": {
+                "Title": {
+                    "type": "title",
+                    "title": [{"type": "text", "text": {"content": job.title}}],
+                },
+                "Company": {
+                    "type": "rich_text",
+                    "rich_text": [{"type": "text", "text": {"content": job.company}}],
+                },
+                "Location": {
+                    "type": "rich_text",
+                    "rich_text": [{"type": "text", "text": {"content": job.location}}],
+                },
+                "Timestamp": {
+                    "type": "date",
+                    "date": {
+                        "start": parsed_date.isoformat() + "Z",
+                        "end": parsed_date.isoformat() + "Z",
+                    },
+                },
+                "Description": {
+                    "type": "rich_text",
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": job.description if job.description else ""
+                            },
+                        }
+                    ],
+                },
+                "Telephone": {
+                    "type": "phone_number",
+                    "phone_number": job.telephone if job.telephone else "000000000",
+                },
+                "Email": {
+                    "type": "email",
+                    "email": job.email if job.email else "example@gmail.com",
+                },
+                "URL": {"type": "url", "url": job.url},
+                "State": {"select": {"name": "😤Not applied"}},
+            },
+        }
+
+        # Send the request to update the database
+        notion.pages.create(**body)
+
+    for job in jobs:
+        append_job_to_database(job)
+        print("Stored new job: ", job.title, "at ", job.company, job.url)
+
+
+def create_notion_database() -> str:
+    title = " ".join(keyword.split("_")).title()
+    result = notion.databases.create(
+        parent={"page_id": NOTION_PAGE_ID},
+        title=[{"type": "text", "text": {"content": title, "link": None}}],
+        properties={
+            "Title": {"title": {}},
+            "Company": {"rich_text": {}},
+            "Location": {"rich_text": {}},
+            "Timestamp": {"date": {}},
+            "Description": {"rich_text": {}},
+            "Telephone": {"phone_number": {}},
+            "Email": {"email": {}},
+            "URL": {"url": {}},
+            "State": {
+                "select": {
+                    "options": [
+                        {"name": "😤Not applied", "color": "red"},
+                        {"name": "🍀Applied", "color": "blue"},
+                        {"name": "👻Ghosted", "color": "yellow"},
+                        {"name": "📚Interview", "color": "green"},
+                        {"name": "🙅Rejected", "color": "yellow"},
+                    ]
+                }
+            },
+        },
+    )
+
+    database_id = result["id"]
+    return database_id
 
 
 if __name__ == "__main__":
-    config_file = "config.json"  # default config file
+    start_time = tm.perf_counter()
 
-    main(config_file)
+    keyword = config["search_queries"][0]["keywords"]
+    keyword = "_".join(keyword.split(" ")).upper()
+
+    # Get the id of the db for the given keyword
+    database_id = os.getenv(keyword)
+
+    if not database_id:
+        id = update_env_file()
+        # Update the .env file with the new keyword
+        os.environ[keyword] = id
+
+    # Retrieve all the jobs from the db id
+    stored_jobs = retrieve_stored_jobs_from_notion()
+
+    # Get all the scrapped jobs
+    new_jobs = retrieve_job_offers()
+
+    # Substract the duplicated job offers
+    jobs_to_store = [job for job in new_jobs if job not in stored_jobs]
+    print(f"This is the number of new scrapped job offers: {len(jobs_to_store)}")
+
+    update_notion_database(jobs_to_store)
+
+    end_time = tm.perf_counter()
+    print(f"Scraping finished in {end_time - start_time:.2f} seconds")
