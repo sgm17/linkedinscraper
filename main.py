@@ -204,7 +204,7 @@ def retrieve_job_offers() -> List[JobOffer]:
                 and len(job["job_description"]) > 2000
             ):
                 # Reduce the length of the job description if it's too large
-                job["job_description"] = job["job_description"][:2000]
+                job["job_description"] = job["job_description"][:1800]
 
             new_job = JobOffer(
                 job["company"],
@@ -407,7 +407,7 @@ if __name__ == "__main__":
         if not database_id:
             id = update_env_file()
             # Update the .env file with the new keyword
-            os.environ[keyword] = id
+            database_id = id
 
         # Retrieve all the jobs from the db id
         stored_jobs = retrieve_stored_jobs_from_notion()
