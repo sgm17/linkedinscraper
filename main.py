@@ -155,12 +155,12 @@ def convert_date_format(date_string):
         return None
 
 
-def get_jobcards(config):
+def get_jobcards(keyword):
     # Function to get the job cards from the search results page
     all_jobs = []
     for k in range(0, config["rounds"]):
         for query in config["search_queries"]:
-            keywords = quote(query["keywords"])  # URL encode the keywords
+            keywords = quote(keyword)  # URL encode the keywords
             location = quote(query["location"])  # URL encode the location
             for i in range(0, config["pages_to_scrape"]):
                 url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={keywords}&location={location}&geoId=&f_TPR={config['timespan']}&start={25*i}"
@@ -174,10 +174,10 @@ def get_jobcards(config):
     return all_jobs
 
 
-def retrieve_job_offers() -> List[JobOffer]:
+def retrieve_job_offers(keyword) -> List[JobOffer]:
     job_list = []
 
-    all_jobs = get_jobcards(config)
+    all_jobs = get_jobcards(keyword)
 
     # filtering out jobs that are already in the database
     print("Total new jobs found after comparing to the database: ", len(all_jobs))
@@ -413,7 +413,7 @@ if __name__ == "__main__":
         stored_jobs = retrieve_stored_jobs_from_notion()
 
         # Get all the scrapped jobs
-        new_jobs = retrieve_job_offers()
+        new_jobs = retrieve_job_offers(search_queries["keywords"])
 
         # Substract the duplicated job offers
         jobs_to_store = [job for job in new_jobs if job not in stored_jobs]
